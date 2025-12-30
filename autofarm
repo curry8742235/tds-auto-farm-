@@ -15,7 +15,7 @@ end
 
 if not TDS then return warn("CRITICAL: Library failed to load.") end
 
--- // 2. SETUP SMART ADAPTATION
+-- // 2. SETUP AGGRESSIVE ADAPTATION
 local Workspace = game:GetService("Workspace")
 local RemoteFunc = game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunction")
 local LocalPlayer = game:GetService("Players").LocalPlayer
@@ -32,7 +32,7 @@ local function GetMapAnchor()
             local obj = paths:FindFirstChild(t)
             if obj then
                 if obj:IsA("BasePart") then return obj.Position end
-                if obj:IsA("Folder") then
+                if obj:IsA("Folder") or obj:IsA("Model") then
                     local p = obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChildWhichIsA("BasePart")
                     if p then return p.Position end
                 end
@@ -42,91 +42,103 @@ local function GetMapAnchor()
     return Vector3.zero
 end
 
--- Raycast to find floor and avoid roads
-local function FindValidFloor(x, z, anchorY)
-    local origin = Vector3.new(x, anchorY + 100, z)
-    local dir = Vector3.new(0, -300, 0)
+-- Raycast to find floor height
+local function GetGroundY(x, z, anchorY)
+    local origin = Vector3.new(x, anchorY + 150, z)
+    local dir = Vector3.new(0, -400, 0)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {LocalPlayer.Character, Workspace:FindFirstChild("Towers"), Workspace:FindFirstChild("Pickups")}
+    params.FilterDescendantsInstances = {LocalPlayer.Character, Workspace:FindFirstChild("Towers"), Workspace:FindFirstChild("Pickups"), Workspace:FindFirstChild("Camera")}
 
     local res = Workspace:Raycast(origin, dir, params)
     if res and res.Instance then
-        -- Check if we hit a path
-        if res.Instance.Name == "Path" or res.Instance.Parent.Name == "Paths" then
-            return nil -- Invalid (Road)
-        end
-        return res.Position.Y + 1.8 -- Return Height + Clearance
+        -- Avoid placing ON TOP of paths if possible, but return the Y anyway
+        -- We return the Y position + 0.1 to sit slightly above ground
+        return res.Position.Y + 0.1, res.Instance
     end
-    return nil -- Void
+    return nil
 end
 
 -- Calculate Global Offset
 local RecAnchor = Vector3.new(-48.8, 3.8, 14.5)
 local CurAnchor = GetMapAnchor()
 local MapOffset = (CurAnchor.Magnitude > 0) and (CurAnchor - RecAnchor) or Vector3.zero
+local RecBaseY = RecAnchor.Y
 
-print("[DeepSeek] Map Offset:", MapOffset)
+print("[DeepSeek] Global Map Offset:", MapOffset)
 
--- // 3. OVERWRITE PLACE FUNCTION (SMART SEARCH)
+-- // 3. AGGRESSIVE PLACE FUNCTION
 TDS.Place = function(self, name, recX, recY, recZ)
     local baseX = recX + MapOffset.X
     local baseZ = recZ + MapOffset.Z
-    local placed = false
     
-    -- Search Radius: Center, then 2 studs out, then 4 studs out...
-    local offsets = {
-        Vector3.new(0,0,0),
-        Vector3.new(2,0,0), Vector3.new(-2,0,0), Vector3.new(0,0,2), Vector3.new(0,0,-2),
-        Vector3.new(3,0,3), Vector3.new(-3,0,-3), Vector3.new(3,0,-3), Vector3.new(-3,0,3)
-    }
+    -- Estimated Height (Blind Fallback)
+    local relativeY = recY - RecBaseY
+    local estimatedY = CurAnchor.Y + relativeY
+
+    -- SEARCH PATTERN: Spiral out to 15 studs
+    local offsets = { Vector3.new(0,0,0) } -- Start exact
+    for r=2, 15, 2.5 do -- Radius steps
+        for theta=0, 360, 45 do -- Angle steps
+            local rad = math.rad(theta)
+            table.insert(offsets, Vector3.new(math.cos(rad)*r, 0, math.sin(rad)*r))
+        end
+    end
 
     for i, off in ipairs(offsets) do
         local tryX = baseX + off.X
         local tryZ = baseZ + off.Z
         
-        -- Check if ground is valid
-        local validY = FindValidFloor(tryX, tryZ, CurAnchor.Y)
+        -- Try to get exact ground height
+        local groundY, hitPart = GetGroundY(tryX, tryZ, CurAnchor.Y)
+        local placeY = groundY or estimatedY -- Use Raycast Y, fallback to Math Y
         
-        if validY then
-            -- Attempt Placement
-            local targetPos = Vector3.new(tryX, validY, tryZ)
+        -- Logic: If we hit a path, skip this attempt unless we are desperate (Radius > 10)
+        local isPath = hitPart and (hitPart.Name == "Path" or hitPart.Parent.Name == "Paths")
+        if not isPath or off.Magnitude > 10 then 
             
-            -- Call Remote
+            -- ATTEMPT PLACEMENT
             local success, res = pcall(function()
                 return RemoteFunc:InvokeServer("Troops", "Place", {
                     Rotation = CFrame.new(),
-                    Position = targetPos
+                    Position = Vector3.new(tryX, placeY, tryZ)
                 }, name)
             end)
 
-            -- Check Success
+            -- VERIFY SUCCESS
             if success and (res == true or (type(res)=="table" and res.Success)) then
-                -- Register Tower
-                task.wait(0.2) -- Wait for instance
+                -- Wait for tower to replicate
+                local timeout = tick() + 2
+                repeat task.wait(0.05) until tick() > timeout or #Workspace.Towers:GetChildren() > #self.placed_towers
+                
+                -- Find the new tower
+                local found = false
                 for _, t in ipairs(Workspace.Towers:GetChildren()) do
                     if t.Name == name and t:FindFirstChild("Owner") and t.Owner.Value == LocalPlayer.UserId then
-                        -- Check if we already tracked this tower
-                        local tracked = false
+                        -- Check if we already tracked this specific instance
+                        local isNew = true
                         for _, existing in ipairs(self.placed_towers) do
-                            if existing == t then tracked = true end
+                            if existing == t then isNew = false break end
                         end
-                        if not tracked then
+                        
+                        if isNew then
                             table.insert(self.placed_towers, t)
-                            print("✅ PLACED", name, "at attempt", i)
-                            return -- Success! Exit function
+                            print("✅ PLACED", name, "| Offset:", off.Magnitude, "studs")
+                            return -- SUCCESS! Exit function
                         end
                     end
                 end
             end
         end
     end
-    print("⚠️ FAILED to place", name, "- Skipping to next")
+    
+    warn("❌ COMPLETELY FAILED to place", name, "- Skipping")
 end
 
-print("--- SMART STRAT LOADED ---")
+print("--- AGGRESSIVE STRAT LOADED ---")
 
--- // 4. RUN STRAT
+-- // 4. EXECUTE STRATEGY
+-- (Units below)
 TDS:Place("Scout", -18.16, 1.00, -2.36)
 TDS:Place("Scout", -18.17, 1.00, -5.55)
 TDS:Place("Scout", -18.19, 1.00, -8.74)
