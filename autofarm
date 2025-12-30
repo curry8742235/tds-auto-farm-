@@ -18,16 +18,28 @@ if not TDS then
     return 
 end
 
--- // 2. ROBUST MAP ANCHORING
-local function SafeGetPos(obj)
+-- // 2. ROBUST MAP ANCHORING (FIXED)
+local function GetPositionFromObject(obj)
     if not obj then return nil end
+    
+    -- If it's a Part, return Position
     if obj:IsA("BasePart") then return obj.Position end
-    if obj:IsA("Model") then 
-        if obj.PrimaryPart then return obj.PrimaryPart.Position end
-        return SafeGetPos(obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChildWhichIsA("BasePart"))
-    end
-    if obj:IsA("Folder") then
-        return SafeGetPos(obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChildWhichIsA("BasePart"))
+    
+    -- If it's a Folder or Model, look inside for "0", "1", or any Part
+    if obj:IsA("Folder") or obj:IsA("Model") then
+        local child0 = obj:FindFirstChild("0")
+        local child1 = obj:FindFirstChild("1")
+        
+        if child0 and child0:IsA("BasePart") then return child0.Position end
+        if child1 and child1:IsA("BasePart") then return child1.Position end
+        
+        -- Recursive check if children are folders
+        if child0 then return GetPositionFromObject(child0) end
+        
+        -- Fallback: Find ANY part inside
+        for _, child in ipairs(obj:GetChildren()) do
+            if child:IsA("BasePart") then return child.Position end
+        end
     end
     return nil
 end
@@ -41,19 +53,19 @@ local function GetMapAnchor()
         return map.EnemySpawn.Position 
     end
     
-    -- Priority 2: Paths Folder
+    -- Priority 2: Paths (Handles Folders/Models)
     local paths = map:FindFirstChild("Paths")
     if paths then
-        -- Check for nodes "0", "1", "Path", "Path1"
-        local targets = {"0", "1", "Path", "Path1"}
+        -- Check common path names
+        local targets = {"0", "1", "Path", "Path1", "Main"}
         for _, name in ipairs(targets) do
-            local found = SafeGetPos(paths:FindFirstChild(name))
+            local found = GetPositionFromObject(paths:FindFirstChild(name))
             if found then return found end
         end
         
         -- Fallback: Check any child in Paths
         for _, child in ipairs(paths:GetChildren()) do
-            local found = SafeGetPos(child)
+            local found = GetPositionFromObject(child)
             if found then return found end
         end
     end
@@ -80,10 +92,7 @@ end
 -- Hook Place Function
 local oldPlace = TDS.Place
 TDS.Place = function(self, name, x, y, z)
-    local finalX = x + MapOffset.X
-    local finalY = y + MapOffset.Y
-    local finalZ = z + MapOffset.Z
-    return oldPlace(self, name, finalX, finalY, finalZ)
+    return oldPlace(self, name, x + MapOffset.X, y + MapOffset.Y, z + MapOffset.Z)
 end
 
 print("--- STRAT LOADED SUCCESSFULLY ---")
