@@ -15,25 +15,24 @@ end
 
 if not TDS then return warn("CRITICAL: Library failed to load.") end
 
--- // 2. MAP ADAPTATION & SNIPER LOGIC
+-- // 2. SETUP SMART ADAPTATION
 local Workspace = game:GetService("Workspace")
+local RemoteFunc = game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunction")
 local LocalPlayer = game:GetService("Players").LocalPlayer
 
--- Helper to find Map Center
+-- Get Map Anchor
 local function GetMapAnchor()
     local map = Workspace:FindFirstChild("Map")
     if not map then return Vector3.zero end
-
     if map:FindFirstChild("EnemySpawn") then return map.EnemySpawn.Position end
-
     local paths = map:FindFirstChild("Paths")
     if paths then
-        local targets = {"0", "1", "Path", "Path1", "Main"}
+        local targets = {"0", "1", "Path", "Path1"}
         for _, t in ipairs(targets) do
             local obj = paths:FindFirstChild(t)
             if obj then
                 if obj:IsA("BasePart") then return obj.Position end
-                if obj:IsA("Folder") or obj:IsA("Model") then
+                if obj:IsA("Folder") then
                     local p = obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChildWhichIsA("BasePart")
                     if p then return p.Position end
                 end
@@ -43,118 +42,133 @@ local function GetMapAnchor()
     return Vector3.zero
 end
 
--- "Sniper" Raycast (Now checks for valid ground)
-local function GetValidFloor(x, z, startHeight)
-    local origin = Vector3.new(x, startHeight + 100, z) 
-    local direction = Vector3.new(0, -300, 0) 
-    
+-- Raycast to find floor and avoid roads
+local function FindValidFloor(x, z, anchorY)
+    local origin = Vector3.new(x, anchorY + 100, z)
+    local dir = Vector3.new(0, -300, 0)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {
-        LocalPlayer.Character,
-        Workspace:FindFirstChild("Towers"),
-        Workspace:FindFirstChild("Camera"),
-        Workspace:FindFirstChild("Pickups"),
-        Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Paths") -- Ignore Paths to hit ground underneath? No, paths are solid.
+    params.FilterDescendantsInstances = {LocalPlayer.Character, Workspace:FindFirstChild("Towers"), Workspace:FindFirstChild("Pickups")}
+
+    local res = Workspace:Raycast(origin, dir, params)
+    if res and res.Instance then
+        -- Check if we hit a path
+        if res.Instance.Name == "Path" or res.Instance.Parent.Name == "Paths" then
+            return nil -- Invalid (Road)
+        end
+        return res.Position.Y + 1.8 -- Return Height + Clearance
+    end
+    return nil -- Void
+end
+
+-- Calculate Global Offset
+local RecAnchor = Vector3.new(-48.8, 3.8, 14.5)
+local CurAnchor = GetMapAnchor()
+local MapOffset = (CurAnchor.Magnitude > 0) and (CurAnchor - RecAnchor) or Vector3.zero
+
+print("[DeepSeek] Map Offset:", MapOffset)
+
+-- // 3. OVERWRITE PLACE FUNCTION (SMART SEARCH)
+TDS.Place = function(self, name, recX, recY, recZ)
+    local baseX = recX + MapOffset.X
+    local baseZ = recZ + MapOffset.Z
+    local placed = false
+    
+    -- Search Radius: Center, then 2 studs out, then 4 studs out...
+    local offsets = {
+        Vector3.new(0,0,0),
+        Vector3.new(2,0,0), Vector3.new(-2,0,0), Vector3.new(0,0,2), Vector3.new(0,0,-2),
+        Vector3.new(3,0,3), Vector3.new(-3,0,-3), Vector3.new(3,0,-3), Vector3.new(-3,0,3)
     }
 
-    local result = Workspace:Raycast(origin, direction, params)
-    
-    if result and result.Instance then
-        -- Check if we hit a path/road (Invalid placement)
-        if result.Instance.Name == "Path" or result.Instance.Parent.Name == "Paths" then
-            -- warn("⚠️ Position is on a Path! Attempting to nudge...")
-            return nil -- Return nil to signify invalid spot
+    for i, off in ipairs(offsets) do
+        local tryX = baseX + off.X
+        local tryZ = baseZ + off.Z
+        
+        -- Check if ground is valid
+        local validY = FindValidFloor(tryX, tryZ, CurAnchor.Y)
+        
+        if validY then
+            -- Attempt Placement
+            local targetPos = Vector3.new(tryX, validY, tryZ)
+            
+            -- Call Remote
+            local success, res = pcall(function()
+                return RemoteFunc:InvokeServer("Troops", "Place", {
+                    Rotation = CFrame.new(),
+                    Position = targetPos
+                }, name)
+            end)
+
+            -- Check Success
+            if success and (res == true or (type(res)=="table" and res.Success)) then
+                -- Register Tower
+                task.wait(0.2) -- Wait for instance
+                for _, t in ipairs(Workspace.Towers:GetChildren()) do
+                    if t.Name == name and t:FindFirstChild("Owner") and t.Owner.Value == LocalPlayer.UserId then
+                        -- Check if we already tracked this tower
+                        local tracked = false
+                        for _, existing in ipairs(self.placed_towers) do
+                            if existing == t then tracked = true end
+                        end
+                        if not tracked then
+                            table.insert(self.placed_towers, t)
+                            print("✅ PLACED", name, "at attempt", i)
+                            return -- Success! Exit function
+                        end
+                    end
+                end
+            end
         end
-        return result.Position.Y
     end
-    return nil
+    print("⚠️ FAILED to place", name, "- Skipping to next")
 end
 
--- // 3. CALCULATE OFFSETS
-local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) 
-local CurAnchor = GetMapAnchor()
-local MapOffset = Vector3.zero
+print("--- SMART STRAT LOADED ---")
 
-if CurAnchor.Magnitude > 0 then
-    MapOffset = CurAnchor - RecAnchor
-    print("[DeepSeek] Map Anchor Found:", CurAnchor)
-else
-    warn("[DeepSeek] Running Blind (No Anchor Found)")
-end
+-- // 4. RUN STRAT
+TDS:Place("Scout", -18.16, 1.00, -2.36)
+TDS:Place("Scout", -18.17, 1.00, -5.55)
+TDS:Place("Scout", -18.19, 1.00, -8.74)
+TDS:Place("Scout", -14.89, 1.00, -9.23)
+TDS:Place("Scout", -17.18, 1.00, -11.71)
+TDS:Place("Scout", -19.92, 1.00, -13.37)
+TDS:Place("Scout", -17.09, 1.00, -14.89)
+TDS:Place("Scout", -14.19, 1.00, -12.89)
+TDS:Place("Scout", -11.89, 1.00, -10.53)
+TDS:Place("Scout", -11.78, 1.00, -3.17)
+TDS:Place("Scout", -8.58, 1.00, -2.99)
+TDS:Place("Scout", -11.85, 1.00, 0.04)
+TDS:Place("Scout", -8.53, 1.00, 0.17)
+TDS:Place("Scout", -11.81, 1.00, 3.27)
+TDS:Place("Scout", -8.53, 1.00, 3.45)
+TDS:Place("Scout", -14.97, 1.00, 3.62)
+TDS:Place("Scout", -18.32, 1.00, 3.66)
+TDS:Place("Scout", -21.56, 1.00, 3.69)
+TDS:Place("Scout", -21.55, 1.00, 7.07)
+TDS:Place("Scout", -18.18, 1.00, 7.07)
+TDS:Place("Scout", -14.82, 1.00, 6.91)
+TDS:Place("Scout", -11.70, 1.00, 6.73)
+TDS:Place("Scout", -8.36, 1.00, 6.84)
+TDS:Place("Scout", -5.36, 1.00, -3.08)
+TDS:Place("Scout", -8.55, 1.00, -9.23)
+TDS:Place("Scout", -4.77, 1.00, -9.17)
+TDS:Place("Scout", -2.12, 1.00, -3.02)
+TDS:Place("Scout", -1.53, 1.00, -9.31)
+TDS:Place("Scout", -24.45, 1.00, -5.66)
+TDS:Place("Scout", -24.49, 1.00, -2.38)
+TDS:Place("Scout", -24.47, 1.00, 1.04)
+TDS:Place("Scout", -24.80, 1.00, 4.40)
+TDS:Place("Scout", -27.41, 1.00, -7.94)
+TDS:Place("Scout", -27.25, 1.00, -11.07)
+TDS:Place("Scout", -1.83, 1.00, 3.27)
+TDS:Place("Scout", 1.25, 1.00, -3.35)
+TDS:Place("Scout", 4.46, 1.00, -3.42)
+TDS:Place("Scout", 1.42, 1.00, 3.43)
+TDS:Place("Scout", 5.39, 1.00, 3.24)
+TDS:Place("Scout", 6.56, 1.00, -7.08)
 
--- Hook Place Function
-local oldPlace = TDS.Place
-TDS.Place = function(self, name, recX, recY, recZ)
-    local targetX = recX + MapOffset.X
-    local targetZ = recZ + MapOffset.Z
-    
-    -- Sniper Logic
-    local floorY = GetValidFloor(targetX, targetZ, CurAnchor.Y)
-    local targetY
-    
-    if floorY then
-        -- IMPORTANT: Add +1.5 studs so it doesn't clip into the floor
-        targetY = floorY + 1.5
-    else
-        -- Fallback if raycast fails or hits a path
-        -- We try to preserve the relative height from the original strat
-        local relativeY = recY - RecAnchor.Y
-        targetY = CurAnchor.Y + relativeY + 1.5 
-    end
-    
-    return oldPlace(self, name, targetX, targetY, targetZ)
-end
-
-print("--- WAITING FOR GAME LOAD ---")
-if not game:IsLoaded() then game.Loaded:Wait() end
-task.wait(2) -- Give time for money to load
-
--- // 4. STRATEGY EXECUTION
-print("--- STARTING PLACEMENTS ---")
-
-TDS:Place("Scout", -18.16, 1.00, -2.36) -- 1
-TDS:Place("Scout", -18.17, 1.00, -5.55) -- 2
-TDS:Place("Scout", -18.19, 1.00, -8.74) -- 3
-TDS:Place("Scout", -14.89, 1.00, -9.23) -- 4
-TDS:Place("Scout", -17.18, 1.00, -11.71) -- 5
-TDS:Place("Scout", -19.92, 1.00, -13.37) -- 6
-TDS:Place("Scout", -17.09, 1.00, -14.89) -- 7
-TDS:Place("Scout", -14.19, 1.00, -12.89) -- 8
-TDS:Place("Scout", -11.89, 1.00, -10.53) -- 9
-TDS:Place("Scout", -11.78, 1.00, -3.17) -- 10
-TDS:Place("Scout", -8.58, 1.00, -2.99) -- 11
-TDS:Place("Scout", -11.85, 1.00, 0.04) -- 12
-TDS:Place("Scout", -8.53, 1.00, 0.17) -- 13
-TDS:Place("Scout", -11.81, 1.00, 3.27) -- 14
-TDS:Place("Scout", -8.53, 1.00, 3.45) -- 15
-TDS:Place("Scout", -14.97, 1.00, 3.62) -- 16
-TDS:Place("Scout", -18.32, 1.00, 3.66) -- 17
-TDS:Place("Scout", -21.56, 1.00, 3.69) -- 18
-TDS:Place("Scout", -21.55, 1.00, 7.07) -- 19
-TDS:Place("Scout", -18.18, 1.00, 7.07) -- 20
-TDS:Place("Scout", -14.82, 1.00, 6.91) -- 21
-TDS:Place("Scout", -11.70, 1.00, 6.73) -- 22
-TDS:Place("Scout", -8.36, 1.00, 6.84) -- 23
-TDS:Place("Scout", -5.36, 1.00, -3.08) -- 24
-TDS:Place("Scout", -8.55, 1.00, -9.23) -- 25
-TDS:Place("Scout", -4.77, 1.00, -9.17) -- 26
-TDS:Place("Scout", -2.12, 1.00, -3.02) -- 27
-TDS:Place("Scout", -1.53, 1.00, -9.31) -- 28
-TDS:Place("Scout", -24.45, 1.00, -5.66) -- 29
-TDS:Place("Scout", -24.49, 1.00, -2.38) -- 30
-TDS:Place("Scout", -24.47, 1.00, 1.04) -- 31
-TDS:Place("Scout", -24.80, 1.00, 4.40) -- 32
-TDS:Place("Scout", -27.41, 1.00, -7.94) -- 33
-TDS:Place("Scout", -27.25, 1.00, -11.07) -- 34
-TDS:Place("Scout", -1.83, 1.00, 3.27) -- 35
-TDS:Place("Scout", 1.25, 1.00, -3.35) -- 36
-TDS:Place("Scout", 4.46, 1.00, -3.42) -- 37
-TDS:Place("Scout", 1.42, 1.00, 3.43) -- 38
-TDS:Place("Scout", 5.39, 1.00, 3.24) -- 39
-TDS:Place("Scout", 6.56, 1.00, -7.08) -- 40
-
--- Max Upgrade Loop
+-- Max Upgrade
 for lvl = 1, 4 do
     for i = 1, 40 do TDS:Upgrade(i) end
     task.wait(1.5)
