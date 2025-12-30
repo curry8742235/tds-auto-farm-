@@ -2,6 +2,7 @@ getgenv().AutoStrat = true
 getgenv().AutoSkip = true 
 getgenv().AutoPickups = true
 
+-- Load the library (which now handles all the adaptation logic)
 local libURL = "https://raw.githubusercontent.com/curry8742235/tds-library/refs/heads/main/library.lua"
 local TDS = loadstring(game:HttpGet(libURL))()
 
@@ -49,8 +50,7 @@ TDS:Place("Scout", 1.42, 1.00, 3.43) -- 38
 TDS:Place("Scout", 5.39, 1.00, 3.24) -- 39
 TDS:Place("Scout", 6.56, 1.00, -7.08) -- 40
 
--- Max Upgrade Loop
 for lvl = 1, 4 do
-    for i = 1, 40 do TDS:Upgrade(i) task.wait(0.2) end
-    task.wait(1)
+    for i = 1, 40 do TDS:Upgrade(i) end
+    task.wait(1.5)
 end
