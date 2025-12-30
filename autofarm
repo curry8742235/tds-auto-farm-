@@ -1,149 +1,14 @@
--- // ========================================== //
--- //      TDS AUTOSTRAT - FINAL EXECUTION       //
--- // ========================================== //
-
--- // 1. CONFIGURATION
 getgenv().AutoStrat = true
 getgenv().AutoSkip = true 
 getgenv().AutoPickups = true
-getgenv().Webhook = "" 
 
--- // 2. LOAD YOUR NEW LIBRARY
+-- Load your updated library
 local libURL = "https://raw.githubusercontent.com/curry8742235/tds-library/refs/heads/main/library.lua"
-local success, TDS = pcall(function() return loadstring(game:HttpGet(libURL))() end)
+local TDS = loadstring(game:HttpGet(libURL))()
 
-if not success or not TDS then
-    warn("Failed to load your library! Using backup...")
-    TDS = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua"))()
-end
+if not TDS then return warn("Library Load Failed") end
 
-if not TDS then return warn("CRITICAL: Library failed to load.") end
-
--- // 3. INJECT "NUCLEAR" MAP ADAPTATION (Safety Patch)
--- This ensures the script works even if your GitHub file is outdated.
-local Workspace = game:GetService("Workspace")
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RemoteFunc = ReplicatedStorage:WaitForChild("RemoteFunction")
-local LocalPlayer = Players.LocalPlayer
-
--- >> Anchor Search
-local function GetPos(obj)
-    if not obj then return nil end
-    if obj:IsA("BasePart") then return obj.Position end
-    if obj:IsA("Model") or obj:IsA("Folder") then
-        local p = obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChild("Start") or obj:FindFirstChildWhichIsA("BasePart")
-        if p and p:IsA("BasePart") then return p.Position end
-        for _, c in ipairs(obj:GetChildren()) do
-            if c:IsA("BasePart") then return c.Position end
-        end
-    end
-    return nil
-end
-
-local function GetMapAnchor()
-    local map = Workspace:FindFirstChild("Map")
-    if not map then return Vector3.zero end
-    
-    if map:FindFirstChild("EnemySpawn") then return map.EnemySpawn.Position end
-
-    local paths = map:FindFirstChild("Paths")
-    if paths then
-        local targets = {"0", "1", "Path", "Path1", "Main"}
-        for _, t in ipairs(targets) do
-            local found = GetPos(paths:FindFirstChild(t))
-            if found then return found end
-        end
-    end
-    return Vector3.zero
-end
-
--- >> Terrain Scanner (Anti-Road/Cliff)
-local function FindValidGround(x, z, startY)
-    local origin = Vector3.new(x, startY + 100, z)
-    local dir = Vector3.new(0, -500, 0)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {LocalPlayer.Character, Workspace:FindFirstChild("Towers"), Workspace:FindFirstChild("Pickups"), Workspace:FindFirstChild("Camera")}
-
-    local res = Workspace:Raycast(origin, dir, params)
-    if res and res.Instance then
-        local hit = res.Instance
-        local n = hit.Name
-        local p = hit.Parent.Name
-        
-        -- BLOCK ROADS & CLIFFS
-        if n == "Road" or p == "Road" or hit.Parent.Parent.Name == "Road" then return nil end
-        if n == "Path" or p == "Paths" or hit.Parent.Parent.Name == "Paths" then return nil end
-        if n == "Bridge" or n == "Cliff" or p == "Cliff" then return nil end
-        if n == "Boundaries" or p == "Boundaries" then return nil end
-        
-        return res.Position.Y + 0.5 -- Valid Ground
-    end
-    return nil
-end
-
--- >> Calculate Offset
-local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) -- Simplicity
-local CurAnchor = GetMapAnchor()
-local MapOffset = (CurAnchor.Magnitude > 0) and (CurAnchor - RecAnchor) or Vector3.zero
-
-print("[DeepSeek] Loaded Library from:", libURL)
-print("[DeepSeek] Active Offset:", MapOffset)
-
--- >> Overwrite Place Function (Spiral Search)
-TDS.Place = function(self, name, recX, recY, recZ)
-    local baseX = recX + MapOffset.X
-    local baseZ = recZ + MapOffset.Z
-    
-    -- Search Radius: 35 Studs
-    local radius = 35
-    local step = 3.5
-    
-    for r = 0, radius, step do
-        local pts = (r==0) and 1 or math.floor((2*math.pi*r)/step)
-        for i=1, pts do
-            local ang = (math.pi*2/pts) * i
-            local tx = baseX + math.cos(ang)*r
-            local tz = baseZ + math.sin(ang)*r
-            
-            -- Scan for valid ground (No Roads)
-            local groundY = FindValidGround(tx, tz, CurAnchor.Y)
-            
-            if groundY then
-                local target = Vector3.new(tx, groundY, tz)
-                
-                local s, res = pcall(function()
-                    return RemoteFunc:InvokeServer("Troops", "Place", {
-                        Rotation = CFrame.new(),
-                        Position = target
-                    }, name)
-                end)
-
-                if s and (res == true or (type(res)=="table" and res.Success)) then
-                    task.wait(0.2)
-                    for _, t in ipairs(Workspace.Towers:GetChildren()) do
-                        if t.Name == name and t.Owner.Value == LocalPlayer.UserId then
-                            local known = false
-                            for _, k in ipairs(self.placed_towers) do if k==t then known=true end end
-                            if not known then
-                                table.insert(self.placed_towers, t)
-                                print("✅ PLACED:", name, "| Radius:", r)
-                                return 
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    warn("❌ FAILED:", name)
-end
-
-print("--- STRAT LOADED ---")
-task.wait(1)
-
--- // 4. STRATEGY LIST
+-- EXECUTE STRAT
 TDS:Place("Scout", -18.16, 1.00, -2.36) -- 1
 TDS:Place("Scout", -18.17, 1.00, -5.55) -- 2
 TDS:Place("Scout", -18.19, 1.00, -8.74) -- 3
@@ -185,7 +50,6 @@ TDS:Place("Scout", 1.42, 1.00, 3.43) -- 38
 TDS:Place("Scout", 5.39, 1.00, 3.24) -- 39
 TDS:Place("Scout", 6.56, 1.00, -7.08) -- 40
 
--- Max Upgrade Loop
 for lvl = 1, 4 do
     for i = 1, 40 do TDS:Upgrade(i) end
     task.wait(1.5)
