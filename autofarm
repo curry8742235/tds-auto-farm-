@@ -1,132 +1,109 @@
 -- // CONFIGURATION
-_G.AutoStrat = true
-_G.AutoSkip = true 
-_G.AutoPickups = true
-_G.Webhook = "" 
+getgenv().AutoStrat = true
+getgenv().AutoSkip = true 
+getgenv().AutoPickups = true
+getgenv().Webhook = "" 
 
 -- // 1. LOAD LIBRARY
+-- Tries your gist first, falls back to main library if needed
 local libURL = "https://gist.githubusercontent.com/curry8742235/38ad26d4b4b3373a9b7b21bf59d14015/raw/85d4d1a32dd0f37fb9e2766bcaf97480cdf121c7/library"
 local success, TDS = pcall(function() return loadstring(game:HttpGet(libURL))() end)
 
 if not success or not TDS then
-    -- Fallback URL
+    warn("Gist failed, using backup library...")
     TDS = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua"))()
 end
 
-if not TDS then return warn("CRITICAL ERROR: Library failed to load.") end
+if not TDS then 
+    game.StarterGui:SetCore("SendNotification", {Title="Error", Text="Library Failed!", Duration=5})
+    return 
+end
 
--- // 2. ROBUST MAP ADAPTATION
+-- // 2. MAP ADAPTATION LOGIC
 local function GetMapAnchor()
     local map = workspace:FindFirstChild("Map")
     if not map then return Vector3.zero end
     
     -- Priority 1: EnemySpawn
-    if map:FindFirstChild("EnemySpawn") then
-        return map.EnemySpawn.Position
-    end
+    if map:FindFirstChild("EnemySpawn") then return map.EnemySpawn.Position end
     
-    -- Priority 2: Paths Folder (Check 0, 1, or first child)
+    -- Priority 2: Paths
     local paths = map:FindFirstChild("Paths")
     if paths then
-        -- Check standard nodes
         if paths:FindFirstChild("0") then return paths["0"].Position end
-        if paths:FindFirstChild("1") then return paths["1"].Position end
-        
-        -- Check nested (Paths -> Path -> 0)
+        -- Nested paths check
         local nested = paths:FindFirstChild("Path") or paths:FindFirstChild("Path1")
-        if nested then
-            if nested:FindFirstChild("0") then return nested["0"].Position end
-            if nested:FindFirstChild("1") then return nested["1"].Position end
-        end
-
-        -- Desperate fallback: First part found in paths
-        for _, child in ipairs(paths:GetChildren()) do
-            if child:IsA("BasePart") then return child.Position end
-        end
+        if nested and nested:FindFirstChild("0") then return nested["0"].Position end
     end
     
     return Vector3.zero
 end
 
--- // CALCULATE OFFSET
-local RecMap = "Simplicity"
-local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) -- Simplicity Spawn
+-- Calculate Offset
+local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) -- Simplicity
 local CurAnchor = GetMapAnchor()
 local MapOffset = Vector3.zero
 
--- Check validity
-if CurAnchor == Vector3.zero then
-    warn("⚠️ WARNING: Could not find Map Anchor! Units might misplace.")
-else
-    local dist = (CurAnchor - RecAnchor).Magnitude
-    if dist > 1 then
+if CurAnchor.Magnitude > 0 then
+    if (CurAnchor - RecAnchor).Magnitude > 2 then
         MapOffset = CurAnchor - RecAnchor
-        print("✅ ADAPTATION SUCCESSFUL!")
-        print("   Anchor Found: " .. tostring(CurAnchor))
-        print("   Offset Applied: " .. tostring(MapOffset))
-    else
-        print("ℹ️ No adaptation needed (Same map position).")
+        print("[DeepSeek] Adapted to map! Offset:", MapOffset)
     end
+else
+    warn("[DeepSeek] Could not find map anchor. Using default positions.")
 end
 
--- // 3. INJECT INTO LIBRARY
+-- Inject Offset into Place function
 local oldPlace = TDS.Place
 TDS.Place = function(self, name, x, y, z)
-    -- Apply offset
-    local finalX = x + MapOffset.X
-    local finalY = y + MapOffset.Y
-    local finalZ = z + MapOffset.Z
-    
-    print("📍 PLACING:", name, "| Pos:", math.floor(finalX), math.floor(finalY), math.floor(finalZ))
-    
-    -- Execute original
-    return oldPlace(self, name, finalX, finalY, finalZ)
+    return oldPlace(self, name, x + MapOffset.X, y + MapOffset.Y, z + MapOffset.Z)
 end
 
-print("--- SCRIPT INITIALIZED ---")
+print("--- STRAT LOADED ---")
 
--- // 4. EXECUTE STRATEGY
-TDS:Place("Scout", -18.16, 1.00, -2.36) -- 1
-TDS:Place("Scout", -18.17, 1.00, -5.55) -- 2
-TDS:Place("Scout", -18.19, 1.00, -8.74) -- 3
-TDS:Place("Scout", -14.89, 1.00, -9.23) -- 4
-TDS:Place("Scout", -17.18, 1.00, -11.71) -- 5
-TDS:Place("Scout", -19.92, 1.00, -13.37) -- 6
-TDS:Place("Scout", -17.09, 1.00, -14.89) -- 7
-TDS:Place("Scout", -14.19, 1.00, -12.89) -- 8
-TDS:Place("Scout", -11.89, 1.00, -10.53) -- 9
-TDS:Place("Scout", -11.78, 1.00, -3.17) -- 10
-TDS:Place("Scout", -8.58, 1.00, -2.99) -- 11
-TDS:Place("Scout", -11.85, 1.00, 0.04) -- 12
-TDS:Place("Scout", -8.53, 1.00, 0.17) -- 13
-TDS:Place("Scout", -11.81, 1.00, 3.27) -- 14
-TDS:Place("Scout", -8.53, 1.00, 3.45) -- 15
-TDS:Place("Scout", -14.97, 1.00, 3.62) -- 16
-TDS:Place("Scout", -18.32, 1.00, 3.66) -- 17
-TDS:Place("Scout", -21.56, 1.00, 3.69) -- 18
-TDS:Place("Scout", -21.55, 1.00, 7.07) -- 19
-TDS:Place("Scout", -18.18, 1.00, 7.07) -- 20
-TDS:Place("Scout", -14.82, 1.00, 6.91) -- 21
-TDS:Place("Scout", -11.70, 1.00, 6.73) -- 22
-TDS:Place("Scout", -8.36, 1.00, 6.84) -- 23
-TDS:Place("Scout", -5.36, 1.00, -3.08) -- 24
-TDS:Place("Scout", -8.55, 1.00, -9.23) -- 25
-TDS:Place("Scout", -4.77, 1.00, -9.17) -- 26
-TDS:Place("Scout", -2.12, 1.00, -3.02) -- 27
-TDS:Place("Scout", -1.53, 1.00, -9.31) -- 28
-TDS:Place("Scout", -24.45, 1.00, -5.66) -- 29
-TDS:Place("Scout", -24.49, 1.00, -2.38) -- 30
-TDS:Place("Scout", -24.47, 1.00, 1.04) -- 31
-TDS:Place("Scout", -24.80, 1.00, 4.40) -- 32
-TDS:Place("Scout", -27.41, 1.00, -7.94) -- 33
-TDS:Place("Scout", -27.25, 1.00, -11.07) -- 34
-TDS:Place("Scout", -1.83, 1.00, 3.27) -- 35
-TDS:Place("Scout", 1.25, 1.00, -3.35) -- 36
-TDS:Place("Scout", 4.46, 1.00, -3.42) -- 37
-TDS:Place("Scout", 1.42, 1.00, 3.43) -- 38
-TDS:Place("Scout", 5.39, 1.00, 3.24) -- 39
-TDS:Place("Scout", 6.56, 1.00, -7.08) -- 40
+-- // 3. STRATEGY EXECUTION
+TDS:Place("Scout", -18.16, 1.00, -2.36)
+TDS:Place("Scout", -18.17, 1.00, -5.55)
+TDS:Place("Scout", -18.19, 1.00, -8.74)
+TDS:Place("Scout", -14.89, 1.00, -9.23)
+TDS:Place("Scout", -17.18, 1.00, -11.71)
+TDS:Place("Scout", -19.92, 1.00, -13.37)
+TDS:Place("Scout", -17.09, 1.00, -14.89)
+TDS:Place("Scout", -14.19, 1.00, -12.89)
+TDS:Place("Scout", -11.89, 1.00, -10.53)
+TDS:Place("Scout", -11.78, 1.00, -3.17)
+TDS:Place("Scout", -8.58, 1.00, -2.99)
+TDS:Place("Scout", -11.85, 1.00, 0.04)
+TDS:Place("Scout", -8.53, 1.00, 0.17)
+TDS:Place("Scout", -11.81, 1.00, 3.27)
+TDS:Place("Scout", -8.53, 1.00, 3.45)
+TDS:Place("Scout", -14.97, 1.00, 3.62)
+TDS:Place("Scout", -18.32, 1.00, 3.66)
+TDS:Place("Scout", -21.56, 1.00, 3.69)
+TDS:Place("Scout", -21.55, 1.00, 7.07)
+TDS:Place("Scout", -18.18, 1.00, 7.07)
+TDS:Place("Scout", -14.82, 1.00, 6.91)
+TDS:Place("Scout", -11.70, 1.00, 6.73)
+TDS:Place("Scout", -8.36, 1.00, 6.84)
+TDS:Place("Scout", -5.36, 1.00, -3.08)
+TDS:Place("Scout", -8.55, 1.00, -9.23)
+TDS:Place("Scout", -4.77, 1.00, -9.17)
+TDS:Place("Scout", -2.12, 1.00, -3.02)
+TDS:Place("Scout", -1.53, 1.00, -9.31)
+TDS:Place("Scout", -24.45, 1.00, -5.66)
+TDS:Place("Scout", -24.49, 1.00, -2.38)
+TDS:Place("Scout", -24.47, 1.00, 1.04)
+TDS:Place("Scout", -24.80, 1.00, 4.40)
+TDS:Place("Scout", -27.41, 1.00, -7.94)
+TDS:Place("Scout", -27.25, 1.00, -11.07)
+TDS:Place("Scout", -1.83, 1.00, 3.27)
+TDS:Place("Scout", 1.25, 1.00, -3.35)
+TDS:Place("Scout", 4.46, 1.00, -3.42)
+TDS:Place("Scout", 1.42, 1.00, 3.43)
+TDS:Place("Scout", 5.39, 1.00, 3.24)
+TDS:Place("Scout", 6.56, 1.00, -7.08)
 
+-- Max Upgrade Loop
 for lvl = 1, 4 do
     for i = 1, 40 do TDS:Upgrade(i) end
     task.wait(1.5)
