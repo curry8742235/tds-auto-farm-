@@ -5,7 +5,6 @@ getgenv().AutoPickups = true
 getgenv().Webhook = "" 
 
 -- // 1. LOAD LIBRARY
--- Tries your gist first, falls back to main library if needed
 local libURL = "https://gist.githubusercontent.com/curry8742235/38ad26d4b4b3373a9b7b21bf59d14015/raw/85d4d1a32dd0f37fb9e2766bcaf97480cdf121c7/library"
 local success, TDS = pcall(function() return loadstring(game:HttpGet(libURL))() end)
 
@@ -19,49 +18,77 @@ if not TDS then
     return 
 end
 
--- // 2. MAP ADAPTATION LOGIC
+-- // 2. ROBUST MAP ANCHORING
+local function SafeGetPos(obj)
+    if not obj then return nil end
+    if obj:IsA("BasePart") then return obj.Position end
+    if obj:IsA("Model") then 
+        if obj.PrimaryPart then return obj.PrimaryPart.Position end
+        return SafeGetPos(obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChildWhichIsA("BasePart"))
+    end
+    if obj:IsA("Folder") then
+        return SafeGetPos(obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChildWhichIsA("BasePart"))
+    end
+    return nil
+end
+
 local function GetMapAnchor()
     local map = workspace:FindFirstChild("Map")
     if not map then return Vector3.zero end
     
     -- Priority 1: EnemySpawn
-    if map:FindFirstChild("EnemySpawn") then return map.EnemySpawn.Position end
+    if map:FindFirstChild("EnemySpawn") then 
+        return map.EnemySpawn.Position 
+    end
     
-    -- Priority 2: Paths
+    -- Priority 2: Paths Folder
     local paths = map:FindFirstChild("Paths")
     if paths then
-        if paths:FindFirstChild("0") then return paths["0"].Position end
-        -- Nested paths check
-        local nested = paths:FindFirstChild("Path") or paths:FindFirstChild("Path1")
-        if nested and nested:FindFirstChild("0") then return nested["0"].Position end
+        -- Check for nodes "0", "1", "Path", "Path1"
+        local targets = {"0", "1", "Path", "Path1"}
+        for _, name in ipairs(targets) do
+            local found = SafeGetPos(paths:FindFirstChild(name))
+            if found then return found end
+        end
+        
+        -- Fallback: Check any child in Paths
+        for _, child in ipairs(paths:GetChildren()) do
+            local found = SafeGetPos(child)
+            if found then return found end
+        end
     end
     
     return Vector3.zero
 end
 
--- Calculate Offset
-local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) -- Simplicity
+-- // 3. APPLY OFFSET
+local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) -- Simplicity Spawn
 local CurAnchor = GetMapAnchor()
 local MapOffset = Vector3.zero
 
-if CurAnchor.Magnitude > 0 then
+if CurAnchor == Vector3.zero then
+    warn("[DeepSeek] ⚠️ Could not find valid Anchor! Units might misplace.")
+else
     if (CurAnchor - RecAnchor).Magnitude > 2 then
         MapOffset = CurAnchor - RecAnchor
-        print("[DeepSeek] Adapted to map! Offset:", MapOffset)
+        print("[DeepSeek] ✅ Adapted to Map! Offset:", MapOffset)
+    else
+        print("[DeepSeek] ℹ️ No adaptation needed (Same position).")
     end
-else
-    warn("[DeepSeek] Could not find map anchor. Using default positions.")
 end
 
--- Inject Offset into Place function
+-- Hook Place Function
 local oldPlace = TDS.Place
 TDS.Place = function(self, name, x, y, z)
-    return oldPlace(self, name, x + MapOffset.X, y + MapOffset.Y, z + MapOffset.Z)
+    local finalX = x + MapOffset.X
+    local finalY = y + MapOffset.Y
+    local finalZ = z + MapOffset.Z
+    return oldPlace(self, name, finalX, finalY, finalZ)
 end
 
-print("--- STRAT LOADED ---")
+print("--- STRAT LOADED SUCCESSFULLY ---")
 
--- // 3. STRATEGY EXECUTION
+-- // 4. STRATEGY EXECUTION
 TDS:Place("Scout", -18.16, 1.00, -2.36)
 TDS:Place("Scout", -18.17, 1.00, -5.55)
 TDS:Place("Scout", -18.19, 1.00, -8.74)
@@ -103,7 +130,6 @@ TDS:Place("Scout", 1.42, 1.00, 3.43)
 TDS:Place("Scout", 5.39, 1.00, 3.24)
 TDS:Place("Scout", 6.56, 1.00, -7.08)
 
--- Max Upgrade Loop
 for lvl = 1, 4 do
     for i = 1, 40 do TDS:Upgrade(i) end
     task.wait(1.5)
