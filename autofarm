@@ -2,13 +2,12 @@ getgenv().AutoStrat = true
 getgenv().AutoSkip = true 
 getgenv().AutoPickups = true
 
--- Load your updated library
 local libURL = "https://raw.githubusercontent.com/curry8742235/tds-library/refs/heads/main/library.lua"
 local TDS = loadstring(game:HttpGet(libURL))()
 
 if not TDS then return warn("Library Load Failed") end
 
--- EXECUTE STRAT
+-- START STRAT
 TDS:Place("Scout", -18.16, 1.00, -2.36) -- 1
 TDS:Place("Scout", -18.17, 1.00, -5.55) -- 2
 TDS:Place("Scout", -18.19, 1.00, -8.74) -- 3
