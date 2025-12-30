@@ -15,23 +15,29 @@ end
 
 if not TDS then return warn("CRITICAL: Library failed to load.") end
 
--- // 2. SETUP AGGRESSIVE ADAPTATION
+-- // 2. SUPER-WIDE ADAPTATION LOGIC
 local Workspace = game:GetService("Workspace")
 local RemoteFunc = game:GetService("ReplicatedStorage"):WaitForChild("RemoteFunction")
 local LocalPlayer = game:GetService("Players").LocalPlayer
 
--- Get Map Anchor
+-- Robust Anchor Finder
 local function GetMapAnchor()
     local map = Workspace:FindFirstChild("Map")
     if not map then return Vector3.zero end
+
+    -- Priority 1: EnemySpawn (Most Accurate)
     if map:FindFirstChild("EnemySpawn") then return map.EnemySpawn.Position end
+
+    -- Priority 2: Path Node 0/1 inside Folders
     local paths = map:FindFirstChild("Paths")
     if paths then
-        local targets = {"0", "1", "Path", "Path1"}
+        local targets = {"0", "1", "Path", "Path1", "Main"}
         for _, t in ipairs(targets) do
             local obj = paths:FindFirstChild(t)
             if obj then
+                -- Check if it's a part
                 if obj:IsA("BasePart") then return obj.Position end
+                -- Check if it's a folder containing a part
                 if obj:IsA("Folder") or obj:IsA("Model") then
                     local p = obj:FindFirstChild("0") or obj:FindFirstChild("1") or obj:FindFirstChildWhichIsA("BasePart")
                     if p then return p.Position end
@@ -42,103 +48,114 @@ local function GetMapAnchor()
     return Vector3.zero
 end
 
--- Raycast to find floor height
-local function GetGroundY(x, z, anchorY)
-    local origin = Vector3.new(x, anchorY + 150, z)
-    local dir = Vector3.new(0, -400, 0)
+-- Raycast that IGNORES paths and props (Finds only Grass/Ground)
+local function GetTerrainHeight(x, z, startY)
+    local origin = Vector3.new(x, startY + 100, z)
+    local dir = Vector3.new(0, -500, 0)
+    
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {LocalPlayer.Character, Workspace:FindFirstChild("Towers"), Workspace:FindFirstChild("Pickups"), Workspace:FindFirstChild("Camera")}
+    params.FilterDescendantsInstances = {
+        LocalPlayer.Character, 
+        Workspace:FindFirstChild("Towers"), 
+        Workspace:FindFirstChild("Pickups"),
+        Workspace:FindFirstChild("Camera")
+    }
 
     local res = Workspace:Raycast(origin, dir, params)
     if res and res.Instance then
-        -- Avoid placing ON TOP of paths if possible, but return the Y anyway
-        -- We return the Y position + 0.1 to sit slightly above ground
-        return res.Position.Y + 0.1, res.Instance
+        local hitName = res.Instance.Name
+        local parentName = res.Instance.Parent.Name
+        
+        -- BLOCK PLACEMENT ON PATHS
+        if hitName == "Path" or parentName == "Paths" or hitName == "Bridge" then
+            return nil, "Hit Path/Bridge"
+        end
+        
+        -- Valid Ground Found
+        return res.Position.Y, hitName
     end
-    return nil
+    return nil, "Void"
 end
 
--- Calculate Global Offset
+-- Calculate Offset
 local RecAnchor = Vector3.new(-48.8, 3.8, 14.5)
 local CurAnchor = GetMapAnchor()
 local MapOffset = (CurAnchor.Magnitude > 0) and (CurAnchor - RecAnchor) or Vector3.zero
-local RecBaseY = RecAnchor.Y
 
-print("[DeepSeek] Global Map Offset:", MapOffset)
+print("------------------------------------------------")
+print("[DeepSeek] Map Anchor:", CurAnchor)
+print("[DeepSeek] Global Offset:", MapOffset)
+print("------------------------------------------------")
 
--- // 3. AGGRESSIVE PLACE FUNCTION
+-- // 3. BRUTE FORCE PLACE FUNCTION (40 STUD RADIUS)
 TDS.Place = function(self, name, recX, recY, recZ)
     local baseX = recX + MapOffset.X
     local baseZ = recZ + MapOffset.Z
     
-    -- Estimated Height (Blind Fallback)
-    local relativeY = recY - RecBaseY
-    local estimatedY = CurAnchor.Y + relativeY
-
-    -- SEARCH PATTERN: Spiral out to 15 studs
-    local offsets = { Vector3.new(0,0,0) } -- Start exact
-    for r=2, 15, 2.5 do -- Radius steps
-        for theta=0, 360, 45 do -- Angle steps
-            local rad = math.rad(theta)
-            table.insert(offsets, Vector3.new(math.cos(rad)*r, 0, math.sin(rad)*r))
-        end
-    end
-
-    for i, off in ipairs(offsets) do
-        local tryX = baseX + off.X
-        local tryZ = baseZ + off.Z
+    -- Search Pattern: Expanding Ring (0 -> 40 studs)
+    local searchRadius = 40 
+    local stepSize = 3 -- Check every 3 studs
+    
+    for r = 0, searchRadius, stepSize do
+        -- Calculate how many points to check in this ring
+        local circumference = (r == 0) and 1 or (2 * math.pi * r)
+        local points = math.max(1, math.floor(circumference / stepSize))
         
-        -- Try to get exact ground height
-        local groundY, hitPart = GetGroundY(tryX, tryZ, CurAnchor.Y)
-        local placeY = groundY or estimatedY -- Use Raycast Y, fallback to Math Y
-        
-        -- Logic: If we hit a path, skip this attempt unless we are desperate (Radius > 10)
-        local isPath = hitPart and (hitPart.Name == "Path" or hitPart.Parent.Name == "Paths")
-        if not isPath or off.Magnitude > 10 then 
+        for i = 1, points do
+            local angle = (math.pi * 2 / points) * i
+            local offsetX = math.cos(angle) * r
+            local offsetZ = math.sin(angle) * r
             
-            -- ATTEMPT PLACEMENT
-            local success, res = pcall(function()
-                return RemoteFunc:InvokeServer("Troops", "Place", {
-                    Rotation = CFrame.new(),
-                    Position = Vector3.new(tryX, placeY, tryZ)
-                }, name)
-            end)
-
-            -- VERIFY SUCCESS
-            if success and (res == true or (type(res)=="table" and res.Success)) then
-                -- Wait for tower to replicate
-                local timeout = tick() + 2
-                repeat task.wait(0.05) until tick() > timeout or #Workspace.Towers:GetChildren() > #self.placed_towers
+            local tryX = baseX + offsetX
+            local tryZ = baseZ + offsetZ
+            
+            -- RAYCAST: Check if valid ground exists here
+            local groundY, hitObj = GetTerrainHeight(tryX, tryZ, CurAnchor.Y)
+            
+            if groundY then
+                -- Try to place slightly above ground
+                local targetPos = Vector3.new(tryX, groundY + 0.5, tryZ)
                 
-                -- Find the new tower
-                local found = false
-                for _, t in ipairs(Workspace.Towers:GetChildren()) do
-                    if t.Name == name and t:FindFirstChild("Owner") and t.Owner.Value == LocalPlayer.UserId then
-                        -- Check if we already tracked this specific instance
-                        local isNew = true
-                        for _, existing in ipairs(self.placed_towers) do
-                            if existing == t then isNew = false break end
+                local success, res = pcall(function()
+                    return RemoteFunc:InvokeServer("Troops", "Place", {
+                        Rotation = CFrame.new(),
+                        Position = targetPos
+                    }, name)
+                end)
+
+                -- Check if server accepted it
+                if success and (res == true or (type(res)=="table" and res.Success)) then
+                    -- Wait for unit to appear
+                    task.wait(0.1)
+                    -- Register to library table
+                    local newTower = nil
+                    for _, t in ipairs(Workspace.Towers:GetChildren()) do
+                        if t.Name == name and t:FindFirstChild("Owner") and t.Owner.Value == LocalPlayer.UserId then
+                            local known = false
+                            for _, k in ipairs(self.placed_towers) do if k == t then known = true end end
+                            if not known then newTower = t break end
                         end
-                        
-                        if isNew then
-                            table.insert(self.placed_towers, t)
-                            print("✅ PLACED", name, "| Offset:", off.Magnitude, "studs")
-                            return -- SUCCESS! Exit function
-                        end
+                    end
+                    
+                    if newTower then
+                        table.insert(self.placed_towers, newTower)
+                        print("✅ PLACED", name, "| Dist:", r, "| Hit:", hitObj)
+                        return -- EXIT FUNCTION (Success)
                     end
                 end
             end
         end
     end
     
-    warn("❌ COMPLETELY FAILED to place", name, "- Skipping")
+    -- If we get here, absolutely nothing worked
+    warn("❌ FAILED to place", name, "after checking 40 studs radius!")
 end
 
-print("--- AGGRESSIVE STRAT LOADED ---")
+print("--- ULTRA-WIDE STRAT LOADED ---")
+task.wait(1)
 
--- // 4. EXECUTE STRATEGY
--- (Units below)
+-- // 4. STRATEGY EXECUTION
 TDS:Place("Scout", -18.16, 1.00, -2.36)
 TDS:Place("Scout", -18.17, 1.00, -5.55)
 TDS:Place("Scout", -18.19, 1.00, -8.74)
