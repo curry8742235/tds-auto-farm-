@@ -9,7 +9,7 @@ local libURL = "https://gist.githubusercontent.com/curry8742235/38ad26d4b4b3373a
 local success, TDS = pcall(function() return loadstring(game:HttpGet(libURL))() end)
 
 if not success or not TDS then
-    -- Fallback to original if gist fails
+    warn("Gist failed, using backup library...")
     TDS = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua"))()
 end
 
@@ -17,16 +17,15 @@ if not TDS then return warn("CRITICAL: Library failed to load.") end
 
 -- // 2. MAP ADAPTATION & SNIPER LOGIC
 local Workspace = game:GetService("Workspace")
+local LocalPlayer = game:GetService("Players").LocalPlayer
 
--- Function to find map center/spawn
+-- Helper to find Map Center
 local function GetMapAnchor()
     local map = Workspace:FindFirstChild("Map")
     if not map then return Vector3.zero end
 
-    -- Check EnemySpawn
     if map:FindFirstChild("EnemySpawn") then return map.EnemySpawn.Position end
 
-    -- Check Paths
     local paths = map:FindFirstChild("Paths")
     if paths then
         local targets = {"0", "1", "Path", "Path1", "Main"}
@@ -44,66 +43,76 @@ local function GetMapAnchor()
     return Vector3.zero
 end
 
--- "Sniper" Raycast to find the floor height
-local function GetSurfaceHeight(x, z, startHeight)
-    local origin = Vector3.new(x, startHeight + 50, z) -- Start 50 studs above anchor
-    local direction = Vector3.new(0, -200, 0) -- Shoot 200 studs down
+-- "Sniper" Raycast (Now checks for valid ground)
+local function GetValidFloor(x, z, startHeight)
+    local origin = Vector3.new(x, startHeight + 100, z) 
+    local direction = Vector3.new(0, -300, 0) 
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {
-        game.Players.LocalPlayer.Character,
+        LocalPlayer.Character,
         Workspace:FindFirstChild("Towers"),
         Workspace:FindFirstChild("Camera"),
-        Workspace:FindFirstChild("Pickups")
+        Workspace:FindFirstChild("Pickups"),
+        Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Paths") -- Ignore Paths to hit ground underneath? No, paths are solid.
     }
 
     local result = Workspace:Raycast(origin, direction, params)
-    if result and result.Position then
+    
+    if result and result.Instance then
+        -- Check if we hit a path/road (Invalid placement)
+        if result.Instance.Name == "Path" or result.Instance.Parent.Name == "Paths" then
+            -- warn("⚠️ Position is on a Path! Attempting to nudge...")
+            return nil -- Return nil to signify invalid spot
+        end
         return result.Position.Y
     end
     return nil
 end
 
--- // 3. CALCULATE & HOOK
-local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) -- Simplicity Spawn
+-- // 3. CALCULATE OFFSETS
+local RecAnchor = Vector3.new(-48.8, 3.8, 14.5) 
 local CurAnchor = GetMapAnchor()
 local MapOffset = Vector3.zero
 
 if CurAnchor.Magnitude > 0 then
     MapOffset = CurAnchor - RecAnchor
-    print("[DeepSeek] Adapted to Map. Offset:", MapOffset)
+    print("[DeepSeek] Map Anchor Found:", CurAnchor)
 else
-    warn("[DeepSeek] Could not find Map Anchor. Running in Blind Mode.")
+    warn("[DeepSeek] Running Blind (No Anchor Found)")
 end
 
+-- Hook Place Function
 local oldPlace = TDS.Place
 TDS.Place = function(self, name, recX, recY, recZ)
-    -- 1. Calculate Target X/Z based on offset
     local targetX = recX + MapOffset.X
     local targetZ = recZ + MapOffset.Z
     
-    -- 2. Use Sniper (Raycast) to find exact floor Y
-    local floorY = GetSurfaceHeight(targetX, targetZ, CurAnchor.Y)
+    -- Sniper Logic
+    local floorY = GetValidFloor(targetX, targetZ, CurAnchor.Y)
     local targetY
     
     if floorY then
-        -- Found the floor, place exactly on it
-        targetY = floorY
-        -- print("🎯 Sniper Locked Floor at Y:", floorY)
+        -- IMPORTANT: Add +1.5 studs so it doesn't clip into the floor
+        targetY = floorY + 1.5
     else
-        -- Raycast missed (Void?), use relative math as fallback
+        -- Fallback if raycast fails or hits a path
+        -- We try to preserve the relative height from the original strat
         local relativeY = recY - RecAnchor.Y
-        targetY = CurAnchor.Y + relativeY
-        -- warn("⚠️ Sniper missed ground! Using calculated Y:", targetY)
+        targetY = CurAnchor.Y + relativeY + 1.5 
     end
     
     return oldPlace(self, name, targetX, targetY, targetZ)
 end
 
-print("--- AUTO-ADAPT & SNIPER LOADED ---")
+print("--- WAITING FOR GAME LOAD ---")
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(2) -- Give time for money to load
 
 -- // 4. STRATEGY EXECUTION
+print("--- STARTING PLACEMENTS ---")
+
 TDS:Place("Scout", -18.16, 1.00, -2.36) -- 1
 TDS:Place("Scout", -18.17, 1.00, -5.55) -- 2
 TDS:Place("Scout", -18.19, 1.00, -8.74) -- 3
@@ -145,7 +154,7 @@ TDS:Place("Scout", 1.42, 1.00, 3.43) -- 38
 TDS:Place("Scout", 5.39, 1.00, 3.24) -- 39
 TDS:Place("Scout", 6.56, 1.00, -7.08) -- 40
 
--- Optimized Upgrade Loop
+-- Max Upgrade Loop
 for lvl = 1, 4 do
     for i = 1, 40 do TDS:Upgrade(i) end
     task.wait(1.5)
